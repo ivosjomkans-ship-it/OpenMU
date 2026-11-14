@@ -1,0 +1,67 @@
+
+name: Build OpenMU with all classes unlocked
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply class unlock fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = [
+              Path("src/GameServer/RemoteView/Character/ShowCharacterListPlugIn.cs"),
+              Path("src/GameServer/RemoteView/Character/ShowCharacterListExtendedPlugIn.cs"),
+          ]
+
+          old = """        byte aggregatedFlags = 0;
+                  var result = account.UnlockedCharacterClasses?
+                      .Where(c => c.IsActive)
+                      .Select(c => c.CreationAllowedFlag)
+                      .Aggregate(aggregatedFlags, (current, flag) => (byte)(current | flag)) ?? 0;
+                  return (CharacterCreationUnlockFlags)result;"""
+
+          new = """        return CharacterCreationUnlockFlags.Summoner
+                      | CharacterCreationUnlockFlags.DarkLord
+                      | CharacterCreationUnlockFlags.MagicGladiator
+                      | CharacterCreationUnlockFlags.RageFighter;"""
+
+          for path in files:
+              content = path.read_text(encoding="utf-8-sig")
+              if old not in content:
+                  raise SystemExit(f"Expected code not found: {path}")
+              content = content.replace(old, new, 1)
+              path.write_text(content, encoding="utf-8")
+              print(f"Patched: {path}")
+          PY
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src
+          file: ./src/Startup/Dockerfile
+          push: true
+          tags: ghcr.io/ivosjomkans-ship-it/openmu:unlock-all-classes-20261114
